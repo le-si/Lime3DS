@@ -25,7 +25,7 @@
 #include <filesystem>
 
 class AboutDialog;
-class Config;
+class QtConfig;
 class ClickableLabel;
 class EmuThread;
 class GameList;
@@ -85,6 +85,8 @@ enum class InstallStatus : u32;
 namespace Service::FS {
 enum class MediaType : u32;
 }
+
+void LaunchQtFrontend(int argc, char* argv[]);
 
 class GMainWindow : public QMainWindow {
     Q_OBJECT
@@ -263,6 +265,7 @@ private slots:
     void ToggleFullscreen();
     void ToggleSecondaryFullscreen();
     void ChangeScreenLayout();
+    void ChangeSmallScreenPosition();
     void UpdateSecondaryWindowVisibility();
     void ToggleScreenLayout();
     void OnSwapScreens();
@@ -348,7 +351,7 @@ private:
     bool message_label_used_for_movie = false;
 
     MultiplayerState* multiplayer_state = nullptr;
-    std::unique_ptr<Config> config;
+    std::unique_ptr<QtConfig> config;
 
     // Whether emulation is currently running in Lime3DS.
     bool emulation_running = false;

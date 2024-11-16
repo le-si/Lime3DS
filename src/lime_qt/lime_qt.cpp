@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <clocale>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -15,6 +16,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtGui>
 #include <QtWidgets>
+#include <boost/algorithm/string/replace.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #ifdef __APPLE__
@@ -24,7 +26,6 @@
 #include <shlobj.h>
 #include <windows.h>
 #else
-#include <iostream>
 #include <getopt.h>
 #endif
 #ifdef __unix__
@@ -44,6 +45,7 @@
 #include "common/memory_detect.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
+#include "lime/common_strings.h"
 #include "lime_qt/aboutdialog.h"
 #include "lime_qt/applets/mii_selector.h"
 #include "lime_qt/applets/swkbd.h"
@@ -70,8 +72,8 @@
 #include "lime_qt/dumping/dumping_dialog.h"
 #include "lime_qt/game_list.h"
 #include "lime_qt/hotkeys.h"
+#include "lime_qt/lime_qt.h"
 #include "lime_qt/loading_screen.h"
-#include "lime_qt/main.h"
 #include "lime_qt/movie/movie_play_dialog.h"
 #include "lime_qt/movie/movie_record_dialog.h"
 #include "lime_qt/multiplayer/state.h"
@@ -116,13 +118,6 @@
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin);
 #endif
 
-#ifdef _WIN32
-extern "C" {
-// tells Nvidia drivers to use the dedicated GPU by default on laptops with switchable graphics
-__declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
-}
-#endif
-
 #ifdef HAVE_SDL2
 #include <SDL.h>
 #endif
@@ -161,6 +156,8 @@ static QString PrettyProductName() {
 
 void GMainWindow::ShowCommandOutput(std::string title, std::string message) {
 #ifdef _WIN32
+    boost::replace_all(message, " ", "\u00a0"); // Non-breaking space
+    boost::replace_all(message, "-", "\u2011"); // Non-breaking hyphen
     QMessageBox::information(this, QString::fromStdString(title), QString::fromStdString(message));
 #else
     std::cout << message << std::endl;
@@ -175,7 +172,7 @@ GMainWindow::GMainWindow(Core::System& system_)
 
     Debugger::ToggleConsole();
 
-    this->config = std::make_unique<Config>();
+    this->config = std::make_unique<QtConfig>();
 
     QStringList args = QApplication::arguments();
     QString game_path;
@@ -188,7 +185,7 @@ GMainWindow::GMainWindow(Core::System& system_)
         }
 
         // Dump video
-        if (args[i] == QStringLiteral("-d")) {
+        if (args[i] == QStringLiteral("--dump-video") || args[i] == QStringLiteral("-d")) {
             if (i >= args.size() - 1 || args[i + 1].startsWith(QChar::fromLatin1('-'))) {
                 continue;
             }
@@ -202,13 +199,13 @@ GMainWindow::GMainWindow(Core::System& system_)
         }
 
         // Launch game in fullscreen mode
-        if (args[i] == QStringLiteral("-f")) {
+        if (args[i] == QStringLiteral("--fullscreen") || args[i] == QStringLiteral("-f")) {
             fullscreen_override = true;
             continue;
         }
 
         // Enable GDB stub
-        if (args[i] == QStringLiteral("-g")) {
+        if (args[i] == QStringLiteral("--gdbport") || args[i] == QStringLiteral("-g")) {
             if (i >= args.size() - 1 || args[i + 1].startsWith(QChar::fromLatin1('-'))) {
                 continue;
             }
@@ -217,24 +214,12 @@ GMainWindow::GMainWindow(Core::System& system_)
             continue;
         }
 
-        if (args[i] == QStringLiteral("-h")) {
-            const std::string help_string =
-                std::string("Usage: ") + args[0].toStdString() +
-                " [options] <file path>\n"
-                "-d [path]    Dump video recording of emulator playback to the given file path\n"
-                "-g [port]    Enable gdb stub on the given port\n"
-                "-f           Start in fullscreen mode\n"
-                "-h           Display this help and exit\n"
-                "-i [path]    Install a CIA file at the given path\n"
-                "-p [path]    Play a TAS movie located at the given path\n"
-                "-r [path]    Record a TAS movie to the given file path\n"
-                "-v           Output version information and exit";
-
-            ShowCommandOutput("Help", help_string);
+        if (args[i] == QStringLiteral("--help") || args[i] == QStringLiteral("-h")) {
+            ShowCommandOutput("Help", fmt::format(Common::help_string, args[0].toStdString()));
             exit(0);
         }
 
-        if (args[i] == QStringLiteral("-i")) {
+        if (args[i] == QStringLiteral("--install") || args[i] == QStringLiteral("-i")) {
             if (i >= args.size() - 1 || args[i + 1].startsWith(QChar::fromLatin1('-'))) {
                 continue;
             }
@@ -267,7 +252,7 @@ GMainWindow::GMainWindow(Core::System& system_)
             exit(0);
         }
 
-        if (args[i] == QStringLiteral("-p")) {
+        if (args[i] == QStringLiteral("--movie-play") || args[i] == QStringLiteral("-p")) {
             if (i >= args.size() - 1 || args[i + 1].startsWith(QChar::fromLatin1('-'))) {
                 continue;
             }
@@ -276,7 +261,7 @@ GMainWindow::GMainWindow(Core::System& system_)
             continue;
         }
 
-        if (args[i] == QStringLiteral("-r")) {
+        if (args[i] == QStringLiteral("--movie-record") || args[i] == QStringLiteral("-r")) {
             if (i >= args.size() - 1 || args[i + 1].startsWith(QChar::fromLatin1('-'))) {
                 continue;
             }
@@ -285,7 +270,25 @@ GMainWindow::GMainWindow(Core::System& system_)
             continue;
         }
 
-        if (args[i] == QStringLiteral("-v")) {
+        if (args[i] == QStringLiteral("--movie-record-author") || args[i] == QStringLiteral("-a")) {
+            if (i >= args.size() - 1 || args[i + 1].startsWith(QChar::fromLatin1('-'))) {
+                continue;
+            }
+            movie_record_author = args[++i];
+            continue;
+        }
+
+        if (args[i] == QStringLiteral("--multiplayer") || args[i] == QStringLiteral("-m")) {
+            std::cout << "Warning: The --multiplayer option is not yet implemented for the Qt "
+                         "frontend; Ignoring."
+                      << std::endl;
+            if (i < args.size() - 1 && !args[i + 1].startsWith(QChar::fromLatin1('-'))) {
+                i++;
+            }
+            continue;
+        }
+
+        if (args[i] == QStringLiteral("--version") || args[i] == QStringLiteral("-v")) {
             const std::string version_string =
                 std::string("Lime3DS ") + Common::g_scm_branch + " " + Common::g_scm_desc;
             ShowCommandOutput("Version", version_string);
@@ -293,7 +296,7 @@ GMainWindow::GMainWindow(Core::System& system_)
         }
 
         // Launch game in windowed mode
-        if (args[i] == QStringLiteral("-w")) {
+        if (args[i] == QStringLiteral("--windowed") || args[i] == QStringLiteral("-w")) {
             fullscreen_override = false;
             continue;
         }
@@ -580,6 +583,16 @@ void GMainWindow::InitializeWidgets() {
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Separate_Windows);
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Hybrid_Screen);
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Custom_Layout);
+
+    QActionGroup* actionGroup_SmallPositions = new QActionGroup(this);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_TopRight);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_MiddleRight);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_BottomRight);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_TopLeft);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_MiddleLeft);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_BottomLeft);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_Above);
+    actionGroup_SmallPositions->addAction(ui->action_Small_Screen_Below);
 }
 
 void GMainWindow::InitializeDebugWidgets() {
@@ -1032,6 +1045,14 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Screen_Layout_Custom_Layout, &GMainWindow::ChangeScreenLayout);
     connect_menu(ui->action_Screen_Layout_Swap_Screens, &GMainWindow::OnSwapScreens);
     connect_menu(ui->action_Screen_Layout_Upright_Screens, &GMainWindow::OnRotateScreens);
+    connect_menu(ui->action_Small_Screen_TopRight, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_MiddleRight, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_BottomRight, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_TopLeft, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_MiddleLeft, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_BottomLeft, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_Above, &GMainWindow::ChangeSmallScreenPosition);
+    connect_menu(ui->action_Small_Screen_Below, &GMainWindow::ChangeSmallScreenPosition);
 
     // Movie
     connect_menu(ui->action_Record_Movie, &GMainWindow::OnRecordMovie);
@@ -1468,7 +1489,7 @@ void GMainWindow::BootGame(const QString& filename) {
         const std::string config_file_name =
             title_id == 0 ? name : fmt::format("{:016X}", title_id);
         LOG_INFO(Frontend, "Loading per game config file for title {}", config_file_name);
-        Config per_game_config(config_file_name, Config::ConfigType::PerGameConfig);
+        QtConfig per_game_config(config_file_name, QtConfig::ConfigType::PerGameConfig);
     }
 
     // Artic Base Server cannot accept a client multiple times, so multiple loaders are not
@@ -2100,7 +2121,7 @@ void GMainWindow::OnGameListCreateShortcut(u64 program_id, const std::string& ga
     }
 #endif // __linux__
     // Create shortcut
-    std::string arguments = fmt::format("-g \"{:s}\"", game_path);
+    std::string arguments = fmt::format("\"{:s}\"", game_path);
     if (CreateShortcutMessagesGUI(this, CREATE_SHORTCUT_MSGBOX_FULLSCREEN_PROMPT, qt_game_title)) {
         arguments = "-f " + arguments;
     }
@@ -2548,13 +2569,13 @@ void GMainWindow::UpdateSecondaryWindowVisibility() {
 
 void GMainWindow::ChangeScreenLayout() {
     Settings::LayoutOption new_layout = Settings::LayoutOption::Default;
-
     if (ui->action_Screen_Layout_Default->isChecked()) {
         new_layout = Settings::LayoutOption::Default;
     } else if (ui->action_Screen_Layout_Single_Screen->isChecked()) {
         new_layout = Settings::LayoutOption::SingleScreen;
     } else if (ui->action_Screen_Layout_Large_Screen->isChecked()) {
         new_layout = Settings::LayoutOption::LargeScreen;
+        ui->menu_Small_Screen_Position->setEnabled(true);
     } else if (ui->action_Screen_Layout_Hybrid_Screen->isChecked()) {
         new_layout = Settings::LayoutOption::HybridScreen;
     } else if (ui->action_Screen_Layout_Side_by_Side->isChecked()) {
@@ -2566,6 +2587,34 @@ void GMainWindow::ChangeScreenLayout() {
     }
 
     Settings::values.layout_option = new_layout;
+    SyncMenuUISettings();
+    system.ApplySettings();
+    UpdateSecondaryWindowVisibility();
+}
+
+void GMainWindow::ChangeSmallScreenPosition() {
+    Settings::SmallScreenPosition new_position = Settings::SmallScreenPosition::BottomRight;
+
+    if (ui->action_Small_Screen_TopRight->isChecked()) {
+        new_position = Settings::SmallScreenPosition::TopRight;
+    } else if (ui->action_Small_Screen_MiddleRight->isChecked()) {
+        new_position = Settings::SmallScreenPosition::MiddleRight;
+    } else if (ui->action_Small_Screen_BottomRight->isChecked()) {
+        new_position = Settings::SmallScreenPosition::BottomRight;
+    } else if (ui->action_Small_Screen_TopLeft->isChecked()) {
+        new_position = Settings::SmallScreenPosition::TopLeft;
+    } else if (ui->action_Small_Screen_MiddleLeft->isChecked()) {
+        new_position = Settings::SmallScreenPosition::MiddleLeft;
+    } else if (ui->action_Small_Screen_BottomLeft->isChecked()) {
+        new_position = Settings::SmallScreenPosition::BottomLeft;
+    } else if (ui->action_Small_Screen_Above->isChecked()) {
+        new_position = Settings::SmallScreenPosition::AboveLarge;
+    } else if (ui->action_Small_Screen_Below->isChecked()) {
+        new_position = Settings::SmallScreenPosition::BelowLarge;
+    }
+
+    Settings::values.small_screen_position = new_position;
+    SyncMenuUISettings();
     system.ApplySettings();
     UpdateSecondaryWindowVisibility();
 }
@@ -3637,6 +3686,31 @@ void GMainWindow::SyncMenuUISettings() {
     ui->action_Screen_Layout_Swap_Screens->setChecked(Settings::values.swap_screen.GetValue());
     ui->action_Screen_Layout_Upright_Screens->setChecked(
         Settings::values.upright_screen.GetValue());
+
+    ui->menu_Small_Screen_Position->setEnabled(Settings::values.layout_option.GetValue() ==
+                                               Settings::LayoutOption::LargeScreen);
+
+    ui->action_Small_Screen_TopRight->setChecked(
+        Settings::values.small_screen_position.GetValue() ==
+        Settings::SmallScreenPosition::TopRight);
+    ui->action_Small_Screen_MiddleRight->setChecked(
+        Settings::values.small_screen_position.GetValue() ==
+        Settings::SmallScreenPosition::MiddleRight);
+    ui->action_Small_Screen_BottomRight->setChecked(
+        Settings::values.small_screen_position.GetValue() ==
+        Settings::SmallScreenPosition::BottomRight);
+    ui->action_Small_Screen_TopLeft->setChecked(Settings::values.small_screen_position.GetValue() ==
+                                                Settings::SmallScreenPosition::TopLeft);
+    ui->action_Small_Screen_MiddleLeft->setChecked(
+        Settings::values.small_screen_position.GetValue() ==
+        Settings::SmallScreenPosition::MiddleLeft);
+    ui->action_Small_Screen_BottomLeft->setChecked(
+        Settings::values.small_screen_position.GetValue() ==
+        Settings::SmallScreenPosition::BottomLeft);
+    ui->action_Small_Screen_Above->setChecked(Settings::values.small_screen_position.GetValue() ==
+                                              Settings::SmallScreenPosition::AboveLarge);
+    ui->action_Small_Screen_Below->setChecked(Settings::values.small_screen_position.GetValue() ==
+                                              Settings::SmallScreenPosition::BelowLarge);
 }
 
 void GMainWindow::RetranslateStatusBar() {
@@ -3722,7 +3796,7 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 #endif
 }
 
-int main(int argc, char* argv[]) {
+void LaunchQtFrontend(int argc, char* argv[]) {
     Common::DetachedTasks detached_tasks;
     MicroProfileOnThreadCreate("Frontend");
     SCOPE_EXIT({ MicroProfileShutdown(); });
@@ -3747,6 +3821,19 @@ int main(int argc, char* argv[]) {
 #endif
 
     QApplication app(argc, argv);
+
+    // Required when using .qrc resources from within a static library.
+    // See https://doc.qt.io/qt-5/resources.html#using-resources-in-a-library
+    Q_INIT_RESOURCE(compatibility_list);
+    Q_INIT_RESOURCE(theme_colorful);
+    Q_INIT_RESOURCE(theme_colorful_dark);
+    Q_INIT_RESOURCE(theme_colorful_midnight_blue);
+    Q_INIT_RESOURCE(theme_default);
+    Q_INIT_RESOURCE(theme_qdarkstyle);
+    Q_INIT_RESOURCE(theme_qdarkstyle_midnight_blue);
+#ifdef ENABLE_QT_TRANSLATION
+    Q_INIT_RESOURCE(languages);
+#endif
 
     // Qt changes the locale and causes issues in float conversion using std::to_string() when
     // generating shaders
@@ -3777,5 +3864,5 @@ int main(int argc, char* argv[]) {
 
     int result = app.exec();
     detached_tasks.WaitForAllTasks();
-    return result;
+    exit(result);
 }
